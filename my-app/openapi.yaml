@@ -1,0 +1,509 @@
+openapi: 3.0.3
+info:
+  title: Refinery Purchase Order System
+  version: 1.0.0
+  description: >
+    Backend APIs for the Refinery Purchase Order system.
+    Services:
+      - Catalog (read-only product catalog)
+      - Procurement (PO drafts, submission, lifecycle)
+servers:
+  - url: /
+paths:
+  /api/catalog/items:
+    get:
+      tags: [Catalog]
+      summary: Search catalog items
+      description: >
+        Search, filter, and sort catalog items for refinery equipment.
+        Idempotent and read-only.
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+          description: Text search across id, name, supplier, manufacturer, model.
+        - in: query
+          name: category
+          schema:
+            type: string
+        - in: query
+          name: supplier
+          schema:
+            type: string
+        - in: query
+          name: inStock
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [price_asc, price_desc, lead_time_asc, lead_time_desc, supplier_asc]
+      responses:
+        '200':
+          description: List of matching catalog items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogItemListResponse'
+  /api/procurement/drafts:
+    post:
+      tags: [Procurement]
+      summary: Create PO draft
+      description: >
+        Create a new purchase order draft. The first line item defines the supplier, and all subsequent
+        items must belong to the same supplier. If the client retries the same request, a new draft may
+        be created; idempotency is primarily enforced at submit time, not draft creation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDraftRequest'
+      responses:
+        '201':
+          description: Draft created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseOrderResponse'
+  /api/procurement/drafts/{id}:
+    get:
+      tags: [Procurement]
+      summary: Get draft or PO by id
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Draft or purchase order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseOrderResponse'
+        '404':
+          description: Not found
+  /api/procurement/drafts/{id}/header:
+    patch:
+      tags: [Procurement]
+      summary: Update draft header
+      description: >
+        Only allowed while status is Draft. Returns 409 if the draft has already been submitted.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDraftHeaderRequest'
+      responses:
+        '200':
+          description: Updated draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseOrderResponse'
+        '409':
+          description: Draft no longer editable
+  /api/procurement/drafts/{id}/lines:
+    post:
+      tags: [Procurement]
+      summary: Add line to draft
+      description: >
+        Adds a line item to a draft. Enforces single-supplier rule at service and DB level.
+        Returns 409 Conflict when supplier mismatch is detected.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddLineRequest'
+      responses:
+        '201':
+          description: Line created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddLineResponse'
+        '409':
+          description: Supplier mismatch or draft not editable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupplierMismatchError'
+  /api/procurement/drafts/{id}/lines/{lineId}:
+    patch:
+      tags: [Procurement]
+      summary: Update draft line
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+        - in: path
+          name: lineId
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLineRequest'
+      responses:
+        '200':
+          description: Updated draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseOrderResponse'
+        '409':
+          description: Draft no longer editable
+    delete:
+      tags: [Procurement]
+      summary: Remove draft line
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+        - in: path
+          name: lineId
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: Line removed
+        '404':
+          description: Line not found
+        '409':
+          description: Draft no longer editable
+  /api/procurement/drafts/{id}/submit:
+    post:
+      tags: [Procurement]
+      summary: Submit draft
+      description: >
+        Submits a draft purchase order. This operation is idempotent: if the draft has already been
+        submitted or moved further along the lifecycle, the same purchase order representation is returned
+        without changing status again. Failure handling:
+        - 409 when the draft is in a non-draft state and cannot be submitted.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Submitted purchase order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseOrderResponse'
+        '409':
+          description: Draft cannot be submitted
+  /api/procurement/purchase-orders:
+    get:
+      tags: [Procurement]
+      summary: List purchase orders
+      parameters:
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/PurchaseOrderStatus'
+      responses:
+        '200':
+          description: List of POs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseOrderListResponse'
+  /api/procurement/purchase-orders/{id}:
+    get:
+      tags: [Procurement]
+      summary: Get purchase order details
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Purchase order with lines and status timeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseOrderResponse'
+        '404':
+          description: Not found
+  /api/procurement/purchase-orders/{id}/status:
+    post:
+      tags: [Procurement]
+      summary: Transition PO status
+      description: >
+        Transitions a purchase order through its lifecycle.
+        Allowed transitions:
+          - Draft → Submitted
+          - Submitted → Approved
+          - Submitted → Rejected
+          - Approved → Fulfilled
+        Returns 409 when an invalid transition is requested.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionStatusRequest'
+      responses:
+        '200':
+          description: Updated purchase order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseOrderResponse'
+        '409':
+          description: Invalid status transition
+components:
+  schemas:
+    CatalogItem:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        supplier:
+          type: string
+        manufacturer:
+          type: string
+        model:
+          type: string
+        description:
+          type: string
+        leadTimeDays:
+          type: integer
+        priceUsd:
+          type: integer
+        inStock:
+          type: boolean
+        specs:
+          type: object
+      required:
+        - id
+        - name
+        - category
+        - supplier
+        - manufacturer
+        - model
+        - description
+        - leadTimeDays
+        - priceUsd
+        - inStock
+        - specs
+    CatalogItemListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CatalogItem'
+    PurchaseOrderStatus:
+      type: string
+      enum: [Draft, Submitted, Approved, Rejected, Fulfilled]
+    PurchaseOrderLine:
+      type: object
+      properties:
+        id:
+          type: integer
+        itemId:
+          type: string
+        quantity:
+          type: integer
+        unitPrice:
+          type: integer
+        leadTimeDays:
+          type: integer
+        lineTotal:
+          type: integer
+        item:
+          $ref: '#/components/schemas/CatalogItem'
+    PurchaseOrderStatusEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+        fromStatus:
+          $ref: '#/components/schemas/PurchaseOrderStatus'
+          nullable: true
+        toStatus:
+          $ref: '#/components/schemas/PurchaseOrderStatus'
+        reason:
+          type: string
+          nullable: true
+        changedAt:
+          type: string
+          format: date-time
+    PurchaseOrder:
+      type: object
+      properties:
+        id:
+          type: integer
+        poNumber:
+          type: string
+        supplier:
+          type: string
+        requestor:
+          type: string
+        costCenter:
+          type: string
+        neededByDate:
+          type: string
+          format: date
+        paymentTerms:
+          type: string
+        status:
+          $ref: '#/components/schemas/PurchaseOrderStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchaseOrderLine'
+        statusEvents:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchaseOrderStatusEvent'
+    PurchaseOrderResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/PurchaseOrder'
+    PurchaseOrderListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchaseOrder'
+    CreateDraftRequest:
+      type: object
+      properties:
+        requestor:
+          type: string
+        costCenter:
+          type: string
+        neededByDate:
+          type: string
+          format: date
+        paymentTerms:
+          type: string
+        firstLine:
+          type: object
+          properties:
+            itemId:
+              type: string
+            quantity:
+              type: integer
+          required:
+            - itemId
+            - quantity
+      required:
+        - requestor
+        - costCenter
+        - neededByDate
+        - paymentTerms
+        - firstLine
+    UpdateDraftHeaderRequest:
+      type: object
+      properties:
+        requestor:
+          type: string
+        costCenter:
+          type: string
+        neededByDate:
+          type: string
+          format: date
+        paymentTerms:
+          type: string
+    AddLineRequest:
+      type: object
+      properties:
+        itemId:
+          type: string
+        quantity:
+          type: integer
+      required:
+        - itemId
+        - quantity
+    AddLineResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            order:
+              $ref: '#/components/schemas/PurchaseOrder'
+            newLine:
+              $ref: '#/components/schemas/PurchaseOrderLine'
+    UpdateLineRequest:
+      type: object
+      properties:
+        quantity:
+          type: integer
+      required:
+        - quantity
+    TransitionStatusRequest:
+      type: object
+      properties:
+        toStatus:
+          $ref: '#/components/schemas/PurchaseOrderStatus'
+        reason:
+          type: string
+      required:
+        - toStatus
+    SupplierMismatchError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: SUPPLIER_MISMATCH
+        message:
+          type: string
+        supplier:
+          type: string
+        attemptedSupplier:
+          type: string
+
